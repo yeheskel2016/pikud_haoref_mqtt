@@ -20,7 +20,8 @@ See \raw_data for explanation on how exactly I grabbed the relevant city id list
 
 --------------------------------------------------------------------------------------------------------
 # Installation and possible limitation
-*First of all this script "pushy_missile_alerts.py" is adapted for Appdaemon, use GPT to convert it to regular python format if needed 
+*This script "pushy_missile_alerts.py" is adapted for Appdaemon, use GPT to convert it to regular python format if needed* 
+
 1.First of all open cities.json and write down the relevant cities you would like to listen to, i.e if I want to listen to "קריית מוצקין" I would take the id of 5001347.
 2.Open the main script "pushy_missile_alerts.py" and in "SEGMENTS" modify to your relevant cities ids
 3.Put the script in your appdaemon/apps location 
