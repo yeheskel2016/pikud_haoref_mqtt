@@ -68,10 +68,11 @@
 5. **Restart HA & AppDaemon**  
    - Check the logs; fix any traceback before leaving it running.  
    - First launch will register the device and fetch a token.
+   - Check log if the /device/auth request went successfully or with forbidden request, if forbidden skip to the next step (and turn off appdaemon or else it would keep run the script in endless) , if no any error so all is OK!
 
 ---
 
-## One-Time `/device/auth` Activation
+## One-Time `/device/auth` Activation - Skip if didnt have forbidden error in script log
 
 Pushy’s SDK misses some required parameters, so run this **once** | Only if the log shows that you received forbidden error in our request attempt.. :
 
