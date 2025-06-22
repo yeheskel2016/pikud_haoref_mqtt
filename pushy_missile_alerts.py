@@ -93,19 +93,33 @@ HEADERS = {
 
 # ──────────────────────────────────────────────────────────────
 # Helper: Pushy-style POST with error-handling
+#   • Accepts non-2xx when bypass_status=True
+#   • Treats {"success": true} in body as real success
 # ──────────────────────────────────────────────────────────────
-def api_post(path, payload):
+def api_post(path, payload, *, bypass_status=False):
     url = f"{API_HOST}{path}"
     r   = requests.post(url, json=payload, headers=HEADERS, timeout=10)
-    if not (200 <= r.status_code <= 299):
-        try:
-            j = r.json()
-            code = j.get("code","")
-            err  = j.get("error", j.get("message","Unknown error"))
-        except ValueError:
-            code, err = "", r.text.strip()
+
+    # Try to decode body once – we’ll need it regardless of status
+    try:
+        body = r.json()
+    except ValueError:
+        body = None                    # not JSON, keep raw for error messages
+
+    # 1) Standard HTTP success
+    if 200 <= r.status_code <= 299:
+        return body if body is not None else r.text
+
+    # 2) Non-2xx *but* caller says “trust the body”
+    if bypass_status and isinstance(body, dict) and body.get("success") is True:
+        return body                    # treat as success, ignore 4xx/5xx
+
+    # 3) Everything else → raise
+    if isinstance(body, dict):
+        code = body.get("code", "")
+        err  = body.get("error", body.get("message", "Unknown error"))
         raise Exception(f"{code}: {err} (HTTP {r.status_code})")
-    return r.json()
+    raise Exception(f"{r.text.strip()} (HTTP {r.status_code})")
 
 class PushyMissileAlerts(hass.Hass):
 
@@ -170,7 +184,7 @@ class PushyMissileAlerts(hass.Hass):
                 "token":     localStorage.get(KS["token"]),
             }
             try:
-                res = api_post("/devices/auth", auth_payload)
+                res = api_post("/devices/auth", auth_payload, bypass_status=True)
                 if not res.get("success", False):
                     raise ValueError(res)
                 logger.info("🔒 /devices/auth succeeded")

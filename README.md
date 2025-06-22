@@ -16,10 +16,7 @@
    - The SDK mimics the mobile app’s rotating host pattern (`mqtt-{timestamp}.ioref.io`) and other quirks.  
    - Plain `paho-mqtt` works, but leads to spurious disconnects and slower delivery.
 
-3. **Manual activation step:**  
-   `POST /devices/auth` must include `androidId`. Pushy’s helper doesn’t expose it, so call the endpoint yourself **once** (see below).
-
-4. **Don’t hammer the broker.**  
+3. **Don’t hammer the broker.**  
    The original app reconnects **once per minute**. Polling every few seconds causes cooldown kicks. (This irrelevant if you would follow the rules of using the pushy-python          libary)
 
 ---
@@ -68,26 +65,8 @@
 
 5. **Restart HA & AppDaemon**  
    - Check the logs; fix any traceback before leaving it running.  
-   - First launch will register the device and fetch a token.
-   - Check log if the /device/auth request went successfully or with forbidden request, if forbidden skip to the next step (and turn off appdaemon or else it would keep run the script in endless) , if no any error so all is OK!
+   - First launch will register the device and fetch a token then register/sub it to the relevant segemnts you have set (cities).
 
----
-
-## One-Time `/device/auth` Activation - Skip if didnt have forbidden error in script log
-
-Pushy’s SDK misses some required parameters, so run this **once** | Only if the log shows that you received forbidden error in our request attempt.. :
-
-```bash
-curl -X POST https://pushy.ioref.app/devices/auth   -H "Content-Type: application/json"   -H "User-Agent: Mozilla/5.0 (Linux; Android 11; Xiaomi 2107113SI) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.64 Mobile Safari/537.36"   -d '{"androidId":"<YOUR_ANDROID_ID>",
-       "appId":"66c20ac875260a035a3af7b2",
-       "auth":"<YOUR_AUTH>",
-       "sdk":10117,
-       "token":"<YOUR_TOKEN>"}'
-```
-
-After the 200 OK, restart AppDaemon – the broker will now push alerts to your topics.
-
----
 
 ## How It Works
 
@@ -105,7 +84,6 @@ Message samples live in **`data_examples/test_data.jsonl`**.
 
 | Issue | Details | Potential Fix |
 |-------|---------|---------------|
-| **`/devices/auth` returns 403** | Cloudflare blocks the request call; manual curl might be required (see above). | Patch Pushy SDK or wrap the request in Python. |
 | **Latency during nationwide barrages** | Multiple simultaneous city alerts create backlog. | Investigate QoS, reconnect strategy, or multi-threaded client. |
 | **Threat classification** | Script currently flags titles containing `ירי רקטות` or `כלי טיס` as *unsafe*. | Use `threat_id` or a whitelist from `titles.json` for robustness. |
 | **Aggressive reconnect experiments** | Polling every 2 s lowers latency but triggers broker cooldowns. | Stick to 60 s rotations that the pushy-libary already does same as original app. (As MQTT not need any pulling, it's working by having active connection to broker and wait till it publish out a message, pulling was just a test I did during the inital stage where I couldnt get message automatically due to not knowing how to activate my generated token.) |
