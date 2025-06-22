@@ -1,0 +1,557 @@
+alias: Tzeva Adom – Chime TTS
+description: Plays the alert chime TTS twice when a real alert arrives
+triggers:
+  - entity_id:
+      - binary_sensor.oref_alert_haim
+      - binary_sensor.oref_alert_motzkin
+      - binary_sensor.missile_alert_kiryat_haim
+      - binary_sensor.missile_alert_kiryat_motzkin
+    to: "on"
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >-
+      {% set last =
+      state_attr('automation.tzeva_adom_chime_tts','last_triggered') %} {{ last
+      is none or (as_timestamp(now()) - as_timestamp(last)) > 360 }}
+actions:
+  - repeat:
+      count: 2
+      sequence:
+        - data:
+            join_players: true
+            unjoin_players: true
+            cache: true
+            chime_path: >-
+              {% set base = '/config/www/chime_tts/' %} {% set updates =
+                   state_attr(trigger.entity_id, 'selected_areas_active_alerts')
+                   | default([], true) %}
+              {% set titles = updates | map(attribute='title') | list %} {% set
+              haim = (
+                   is_state('binary_sensor.oref_alert_haim','on') or
+                   is_state('binary_sensor.missile_alert_kiryat_haim','on')
+                 ) %}
+              {% set motzkin = (
+                   is_state('binary_sensor.oref_alert_motzkin','on') or
+                   is_state('binary_sensor.missile_alert_kiryat_motzkin','on')
+                 ) %}
+
+              {# Missile attack #} {% if 'ירי רקטות וטילים' in titles %}
+                {% if haim and motzkin %}
+                  {{ base }}qiryathaimandmotzkinmisslealert.mp3
+                {% elif haim %}
+                  {{ base }}qiryathaimmisslealert.mp3
+                {% else %}
+                  {{ base }}qiryatmotzkinmisslealert.mp3
+                {% endif %}
+
+              {# Hostile UAV #} {% elif 'חדירת כלי טיס עוין' in titles %}
+                {% if haim and motzkin %}
+                  {{ base }}qiryathaimandmotzkinkatbm.mp3
+                {% elif haim %}
+                  {{ base }}qiryathaimkatbm.mp3
+                {% else %}
+                  {{ base }}qiryatmotzkinkatbm.mp3
+                {% endif %}
+
+              {# Fallback #} {% else %}
+                {{ base }}qiryathaimandmotzkindefault.mp3
+              {% endif %}
+            end_chime_path: /config/www/chime_tts/klingon_alert.mp3
+          target:
+            entity_id:
+              - media_player.edo_room
+              - media_player.boyidem
+              - media_player.dor_room
+              - media_player.kitchen
+              - media_player.living_room
+              - media_player.parents_room
+          action: chime_tts.say
+        - delay: "00:00:21"
+mode: single
+
+
+
+
+alias: Tzeva Adom – Launch Mako TV
+description: Launches the Mako VOD Android TV app on real rocket/UAV alerts
+triggers:
+  - entity_id:
+      - binary_sensor.oref_alert_haim
+      - binary_sensor.oref_alert_motzkin
+      - binary_sensor.missile_alert_kiryat_haim
+      - binary_sensor.missile_alert_kiryat_motzkin
+    to: "on"
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >-
+      {% set last = state_attr('automation.tzeva_adom_launch_tv',
+      'last_triggered') %} {{ last is none or (as_timestamp(now()) -
+      as_timestamp(last)) > 360 }}
+actions:
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: media_player.shalter_tv
+            state: "off"
+        sequence:
+          - target:
+              entity_id: media_player.shalter_tv
+            action: media_player.turn_on
+            data: {}
+          - delay:
+              hours: 0
+              minutes: 0
+              seconds: 22
+              milliseconds: 0
+          - target:
+              entity_id: media_player.shalter_tv
+            data:
+              media_content_type: app
+              media_content_id: com.keshet.mako.VODAndroidTV
+            action: media_player.play_media
+          - delay:
+              hours: 0
+              minutes: 0
+              seconds: 5
+              milliseconds: 0
+          - action: remote.send_command
+            metadata: {}
+            data:
+              delay_secs: 0.5
+              hold_secs: 0
+              command: DPAD_CENTER
+            target:
+              entity_id: remote.shalter
+    default: []
+mode: single
+
+
+
+alias: Tzeva Adom – Night Lights
+description: Turns on hallway & living-room lights (and kitchen if off) between 00:00–06:00
+triggers:
+  - entity_id:
+      - binary_sensor.oref_alert_haim
+      - binary_sensor.oref_alert_motzkin
+      - binary_sensor.missile_alert_kiryat_haim
+      - binary_sensor.missile_alert_kiryat_motzkin
+    to: "on"
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >
+      {% set last =
+      state_attr('automation.possible_missle_alert','last_triggered') %} {{ last
+      is none or (as_timestamp(now()) - as_timestamp(last)) > 360 }}
+  - condition: template
+    value_template: >-
+      {% set last =
+      state_attr('automation.tzeva_adom_night_lights','last_triggered') %} {{
+      last is none or (as_timestamp(now()) - as_timestamp(last)) > 60 }}
+  - condition: time
+    after: "00:00:00"
+    before: "06:00:00"
+actions:
+  - target:
+      entity_id:
+        - light.livingroom_small_light
+        - light.hallway_light
+    action: light.turn_on
+    data: {}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |-
+              {{ states('light.kitchen_lights_color')
+                 in ['off','unavailable'] }}
+        sequence:
+          - target:
+              entity_id: light.kitchen_main_light
+            action: light.turn_on
+            data: {}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |-
+              {{ states('light.bathroom_light_color')
+                 in ['off','unavailable'] }}
+        sequence:
+          - target:
+              entity_id: light.bathroom_light
+            action: light.turn_on
+            data: {}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |-
+              {{ states('light.parentsroom_light_color')
+                 in ['off','unavailable'] }}
+        sequence:
+          - target:
+              entity_id: light.parentsroom_bathroom_light
+            action: light.turn_on
+            data: {}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |-
+              {{ states('light.edoroom_light_color')
+                 in ['off','unavailable'] }}
+        sequence:
+          - target:
+              entity_id: light.edoroom_light
+            action: light.turn_on
+            data: {}
+mode: single
+
+
+
+
+alias: Possible Missile Alert
+description: >
+  Plays short update sounds for non-critical titles from Oref or MQTT, and turns
+  on hallway & living-room (and kitchen/edoroom if off) between midnight and
+  06:00 after the alert chime.
+triggers:
+  - entity_id:
+      - binary_sensor.oref_alert_haim
+      - binary_sensor.oref_alert_motzkin
+      - binary_sensor.missile_alert_kiryat_haim
+      - binary_sensor.missile_alert_kiryat_motzkin
+    attribute: selected_areas_updates
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >
+      {% set last =
+      state_attr('automation.possible_missle_alert','last_triggered') %} {{ last
+      is none or (as_timestamp(now()) - as_timestamp(last)) > 280 }}
+  - condition: template
+    value_template: |-
+      {% set old = trigger.from_state.attributes.selected_areas_updates
+         | default([], true)
+         | map(attribute='title')
+         | unique
+         | sort
+         | list %}
+      {% set new = trigger.to_state.attributes.selected_areas_updates
+         | default([], true)
+         | map(attribute='title')
+         | unique
+         | sort
+         | list %}
+      {{ old != new }}
+  - condition: template
+    value_template: >
+      {{ state_attr(trigger.entity_id, 'selected_areas_updates') | default([],
+      true) | length > 0 }}
+actions:
+  - variables:
+      base: /config/www/chime_tts/
+      alert_title: בדקות הקרובות צפויות להתקבל התרעות באזורך
+      uav_end_title: חדירת כלי טיס עוין - האירוע הסתיים
+      missile_end_title: ירי רקטות וטילים - האירוע הסתיים
+      finish_alert1: ניתן לצאת מהמרחב המוגן
+      finish_title: ניתן לצאת מהמרחב המוגן אך יש להישאר בקרבתו
+      haim_updates: |
+        {{ (
+            (state_attr('binary_sensor.oref_alert_haim','selected_areas_updates') 
+              | default([], true))
+            + (state_attr('binary_sensor.missile_alert_kiryat_haim','selected_areas_updates') 
+              | default([], true))
+          )
+          | list
+        }}
+      motzkin_updates: |
+        {{ (
+            (state_attr('binary_sensor.oref_alert_motzkin','selected_areas_updates') 
+              | default([], true))
+            + (state_attr('binary_sensor.missile_alert_kiryat_motzkin','selected_areas_updates') 
+              | default([], true))
+          )
+          | list
+        }}
+      haim_titles: >
+        {{ haim_updates | map(attribute='title') | map('regex_replace', '\\s+',
+        ' ') | map('trim') | list }}
+      motzkin_titles: >
+        {{ motzkin_updates | map(attribute='title') | map('regex_replace',
+        '\\s+', ' ') | map('trim') | list }}
+      finish_present: "{{ finish_title in haim_titles or finish_title in motzkin_titles }}"
+      finish_present1: "{{ finish_alert1 in haim_titles or finish_alert1 in motzkin_titles }}"
+      uav_end_present: "{{ uav_end_title in haim_titles or uav_end_title in motzkin_titles }}"
+      missile_end_present1: >
+        {{ 'האירוע הסתיים' in (haim_titles | join(' ')) or 'האירוע הסתיים' in
+        (motzkin_titles | join(' ')) }}
+      missile_end_present: >-
+        {{ missile_end_title in haim_titles or missile_end_title in
+        motzkin_titles }}
+      alert_haim_present: "{{ alert_title in haim_titles }}"
+      alert_motzkin_present: "{{ alert_title in motzkin_titles }}"
+      alert_present: "{{ alert_haim_present or alert_motzkin_present }}"
+      preemptive_chime_path: |
+        {% if alert_haim_present and alert_motzkin_present %}
+          {{ base }}preempetivemotzkinandhaim.mp3
+        {% elif alert_haim_present %}
+          {{ base }}preempetivehaim.mp3
+        {% elif alert_motzkin_present %}
+          {{ base }}preempetivemotzkin.mp3
+        {% else %}
+          {{ base }}preempetivedefault.mp3
+        {% endif %}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ finish_present or uav_end_present or finish_present1 or
+              missile_end_present or missile_end_present1 }}
+        sequence:
+          - data:
+              join_players: true
+              unjoin_players: true
+              cache: true
+              end_chime_path: "{{ base }}finishalert.mp3"
+            target:
+              entity_id:
+                - media_player.edo_room
+                - media_player.boyidem
+                - media_player.dor_room
+                - media_player.kitchen
+                - media_player.living_room
+                - media_player.parents_room
+                - media_player.shalter_cast
+            action: chime_tts.say
+          - delay:
+              hours: 0
+              minutes: 0
+              seconds: 11
+              milliseconds: 0
+          - target:
+              entity_id: media_player.shalter_tv
+            action: media_player.turn_off
+            data: {}
+          - delay:
+              seconds: 30
+      - conditions:
+          - condition: template
+            value_template: "{{ alert_present }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: time
+                    after: "00:00:00"
+                    before: "06:00:00"
+                sequence:
+                  - data:
+                      join_players: true
+                      unjoin_players: true
+                      cache: true
+                      end_chime_path: "{{ preemptive_chime_path }}"
+                    target:
+                      entity_id:
+                        - media_player.edo_room
+                        - media_player.boyidem
+                        - media_player.dor_room
+                        - media_player.kitchen
+                        - media_player.living_room
+                        - media_player.parents_room
+                    action: chime_tts.say
+                  - target:
+                      entity_id:
+                        - light.livingroom_small_light
+                        - light.hallway_light
+                    action: light.turn_on
+                    data: {}
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: >-
+                              {{ states('light.kitchen_lights_color') in
+                              ['off','unavailable'] }}
+                        sequence:
+                          - target:
+                              entity_id: light.kitchen_main_light
+                            action: light.turn_on
+                            data: {}
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: >-
+                              {{ states('light.bathroom_light_color') in
+                              ['off','unavailable'] }}
+                        sequence:
+                          - target:
+                              entity_id: light.bathroom_light
+                            action: light.turn_on
+                            data: {}
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: >-
+                              {{ states('light.parentsroom_light_color') in
+                              ['off','unavailable'] }}
+                        sequence:
+                          - target:
+                              entity_id: light.parentsroom_bathroom_light
+                            action: light.turn_on
+                            data: {}
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: >-
+                              {{ states('light.edoroom_light_color') in
+                              ['off','unavailable'] }}
+                        sequence:
+                          - target:
+                              entity_id: light.edoroom_light
+                            action: light.turn_on
+                            data: {}
+                  - delay:
+                      seconds: 15
+                  - data:
+                      join_players: true
+                      unjoin_players: true
+                      cache: true
+                      end_chime_path: "{{ preemptive_chime_path }}"
+                    target:
+                      entity_id:
+                        - media_player.edo_room
+                        - media_player.boyidem
+                        - media_player.dor_room
+                        - media_player.kitchen
+                        - media_player.living_room
+                        - media_player.parents_room
+                    action: chime_tts.say
+            default:
+              - data:
+                  join_players: true
+                  unjoin_players: true
+                  cache: true
+                  end_chime_path: "{{ preemptive_chime_path }}"
+                target:
+                  entity_id:
+                    - media_player.edo_room
+                    - media_player.boyidem
+                    - media_player.dor_room
+                    - media_player.kitchen
+                    - media_player.living_room
+                    - media_player.parents_room
+                action: chime_tts.say
+          - delay:
+              seconds: 20
+mode: single
+
+
+
+
+alias: Missile Alert – Yeelights Red and Restore
+description: >-
+  On real rocket/UAV alerts (either via Oref or MQTT), wait 5 s, then flash all
+  on Yeelights red for 30 s (4×), hold steady red for 10 min, then restore their
+  pre-alert state, including any bulbs that came on during the flash loop.
+triggers:
+  - entity_id:
+      - binary_sensor.oref_alert_haim
+      - binary_sensor.oref_alert_motzkin
+      - binary_sensor.missile_alert_kiryat_haim
+      - binary_sensor.missile_alert_kiryat_motzkin
+    to: "on"
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >
+      {% set last =
+      state_attr('automation.missile_alert_yeelights_red_restore','last_triggered')
+      %} {{ last is none or (as_timestamp(now()) - as_timestamp(last)) > 360 }}
+actions:
+  - variables:
+      target_lights:
+        - light.kitchen_lights_color
+        - light.kvisa_light_color
+        - light.edoroom_light_color
+        - light.boyidem_light_color
+        - light.parentsroom_light_color
+        - light.bathroom_light_color
+      retry_lights: "{{ target_lights | list }}"
+      snapped_lights: []
+  - repeat:
+      count: 4
+      sequence:
+        - variables:
+            available_lights: |
+              {{ retry_lights
+                 | expand
+                 | selectattr('state','equalto','on')
+                 | map(attribute='entity_id')
+                 | list }}
+            new_lights: "{{ available_lights | difference(snapped_lights) }}"
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: "{{ new_lights | length > 0 }}"
+              sequence:
+                - data:
+                    scene_id: prev_alert_lights
+                    snapshot_entities: "{{ snapped_lights + new_lights }}"
+                  action: scene.create
+                - variables:
+                    snapped_lights: "{{ snapped_lights + new_lights }}"
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: "{{ available_lights | length > 0 }}"
+              sequence:
+                - target:
+                    entity_id: "{{ available_lights }}"
+                  data:
+                    mode: normal
+                  continue_on_error: true
+                  action: yeelight.set_mode
+                - target:
+                    entity_id: "{{ available_lights }}"
+                  data:
+                    count: 0
+                    action: stay
+                    transitions:
+                      - RGBTransition:
+                          - 255
+                          - 0
+                          - 0
+                          - 400
+                          - 100
+                      - SleepTransition: 400
+                  continue_on_error: true
+                  action: yeelight.start_flow
+                - variables:
+                    retry_lights: "{{ retry_lights | difference(available_lights) }}"
+        - delay:
+            hours: 0
+            minutes: 0
+            seconds: 5
+            milliseconds: 0
+  - target:
+      entity_id: "{{ snapped_lights }}"
+    data:
+      mode: normal
+    continue_on_error: true
+    action: yeelight.set_mode
+  - target:
+      entity_id: "{{ snapped_lights }}"
+    data:
+      rgb_color:
+        - 255
+        - 0
+        - 0
+      transition: 0.5
+    continue_on_error: true
+    action: light.turn_on
+  - delay: "00:10:00"
+  - target:
+      entity_id: scene.prev_alert_lights
+    action: scene.turn_on
+    data: {}
+mode: single
+
+

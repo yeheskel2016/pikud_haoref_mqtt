@@ -1,0 +1,4 @@
+pushy_missile_alerts:
+  module: pushy_missile_alerts
+  class: PushyMissileAlerts
+  clear_on_start: False
