@@ -11,13 +11,8 @@
 1. **One Android ID = One token.**  
    Generating multiple IDs floods the broker with clients-to-track and risks a ban for this whole solution, so please know what you doing before running it, feel free to ask          questions.  
    *Hard-code or persist the ID after the first run.*
-
-2. **Use Pushy’s official Python SDK** (`pushy-python`).  
-   - The SDK mimics the mobile app’s rotating host pattern (`mqtt-{timestamp}.ioref.io`) and other quirks.  
-   - Plain `paho-mqtt` works, but leads to spurious disconnects and slower delivery.
-
-3. **Don’t hammer the broker.**  
-   The original app reconnects **once per minute**. Polling every few seconds causes cooldown kicks. (This irrelevant if you would follow the rules of using the pushy-python          libary)
+   
+2. **Don’t hammer the broker.**  
 
 ---
 
@@ -43,7 +38,7 @@
 ## Quick-Start (Home Assistant + AppDaemon)
 
 > *The script is written as an **AppDaemon** app.  
-> If you want a standalone script, just strip the AppDaemon class wrapper – everything else is pure Python.*
+> If you want a standalone script, try the mqttest.py
 
 1. **Pick your cities**  
    - Open **`cities.json`** and copy the IDs of the localities you care about (e.g. `5001347` for “קריית מוצקין”).  
@@ -72,7 +67,6 @@
 
 | Component | Role |
 |-----------|------|
-| **Pushy SDK** | Maintains an MQTT connection, rotating hosts every minute like the Android app. |
 | **`pushy_missile_alerts.py`** | Subscribes to city-specific topics, decodes messages, and publishes two Home Assistant-friendly MQTT topics: `selected_areas_active_alerts` and `selected_areas_updates`. |
 | **Automations** | Combine this sensor with the [amitfin/oref_alert](https://github.com/amitfin/oref_alert) integration for redundancy and race-condition guards. |
 
@@ -86,9 +80,6 @@ Message samples live in **`data_examples/test_data.jsonl`**.
 |-------|---------|---------------|
 | **Latency during nationwide barrages** | Multiple simultaneous city alerts create backlog. | Investigate QoS, reconnect strategy, or multi-threaded client. |
 | **Threat classification** | Script currently flags titles containing `ירי רקטות` or `כלי טיס` as *unsafe*. | Use `threat_id` or a whitelist from `titles.json` for robustness. |
-| **Aggressive reconnect experiments** | Polling every 2 s lowers latency but triggers broker cooldowns. | Stick to 60 s rotations that the pushy-libary already does same as original app. (As MQTT not need any pulling, it's working by having active connection to broker and wait till it publish out a message, pulling was just a test I did during the inital stage where I couldnt get message automatically due to not knowing how to activate my generated token.) |
-
-*For the latency issue that happened few times to me, I'm currently checking out some more different configurations, if manage to produce better results I will update the script here.*
 ---
 
 ## Contributing
