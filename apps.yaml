@@ -1,4 +1,18 @@
-pushy_missile_alerts:
-  module: pushy_missile_alerts
-  class: PushyMissileAlerts
-  clear_on_start: False
+missile_alerts_app:
+  module: missile_alerts_app
+  class: MissileAlertsApp
+  debug: False
+  segments:
+    - "5001878" # חיפה - קריית חיים ושמואל
+    - "5001347" # קריית מוצקין
+
+  name_map:
+    "5001878": "חיפה - קריית חיים ושמואל"
+    "5001347": "קריית מוצקין"
+  
+  state_topic: "missile_alerts/5001347_5001878"
+  attr_topic: "missile_alerts/5001347_5001878_attr"
+  log_paho: paho_log
+  # You can override other defaults here if needed, e.g.:
+  # state_topic: "missile_alerts/my_custom_sensor"
+  # attr_topic: "missile_alerts/my_custom_sensor_attr"

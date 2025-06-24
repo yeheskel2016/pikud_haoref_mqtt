@@ -3,8 +3,9 @@
 """
 missile_alerts.py
 
-A robust Paho-MQTT listener that correctly mimics the Pushy library's
-true "connect-once" lifecycle, with a graceful shutdown and modern Paho-MQTT v2 API.
+A robust Paho-MQTT listener that correctly mimics the Pushy Android SDK's
+true "connect-once" and persistent session lifecycle, now with full
+Home Assistant integration and state cleanup.
 """
 
 import os
@@ -16,7 +17,7 @@ import random
 import logging
 import threading
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import deque
 
 import requests
@@ -33,12 +34,21 @@ KEEPALIVE_SEC = 300  # MQTT keepalive
 MQTT_TEMPLATE = "mqtt-{timestamp}.ioref.io"
 MQTT_PORT = 443  # same for Pro & Enterprise
 QOS = 1
-MAX_AGE_S = 45  # Maximum age of an alert in seconds before we consider it stale
-SEGMENTS = {"5003000", "5003001", "5003006", "5003004", "5003003", "5003002", "5003005", "5001878", "5001347"}
+MAX_AGE_S = 45  # Maximum age in seconds for an alert to be considered "fresh"
+EXPIRY_S = 600  # Purge list entries older than 10 minutes (600s)
 
-# Local broker for Home Assistant
-HA_MQTT_HOST = "localhost"
+SEGMENTS = {"5001878", "5001347"}
+
+# --- Home Assistant MQTT Config ---
+HA_MQTT_HOST = ""
 HA_MQTT_PORT = 1883
+HA_MQTT_USER = ""
+HA_MQTT_PASS = ""
+
+# --- Home Assistant Topic Config ---
+# NOTE: Using a single, combined sensor for simplicity based on your AppDaemon script
+STATE_TOPIC = f"missile_alerts/test"
+ATTR_TOPIC = f"missile_alerts/test_attr"
 
 # ─── STORAGE ────────────────────────────────────────────────────────────────
 STORAGE_DIR = os.path.expanduser("missile_alerts")
@@ -122,7 +132,6 @@ def unsubscribe_topics(token, auth, topics):
 
 
 def reconcile_subscriptions(token, auth):
-    # first-run dance
     if not os.path.exists(SUBS_FILE):
         logger.info("No subs.json → first-run dance (sub1,unsub1)")
         subscribe_topics(token, auth, "1")
@@ -184,111 +193,124 @@ def get_mqtt_keepalive():
     return KEEPALIVE_SEC
 
 
-# ─── PUSHY-STYLE CALLBACKS ─────────────────────────────────────────────────
+# ─── PUSHY-STYLE CALLBACKS & HA PUBLISHING ──────────────────────────────────
 _seen = deque(maxlen=2000)
+attr_state = {
+    "selected_areas_active_alerts": [],
+    "selected_areas_updates": []
+}
+attr_state_lock = threading.Lock()
+
+name_map = {
+    "5001878": "חיפה - קריית חיים ושמואל",
+    "5001347": "קריית מוצקין"
+}
 
 
-def _publish_to_ha(single, hits):
-    """
-    This function runs in a separate thread to avoid blocking the main MQTT loop.
-    """
+def _publish_to_ha():
+    global attr_state
     try:
-        real_titles = {"ירי רקטות וטילים", "חדירת כלי טיס עוין"}
         pub = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id="home-assistant-publisher")
+        pub.username_pw_set(HA_MQTT_USER, HA_MQTT_PASS)
         pub.connect(HA_MQTT_HOST, HA_MQTT_PORT)
 
-        for seg in hits:
-            flag = "1" if single["title"] in real_titles else "0"
-            pub.publish(f"missile_alerts/{seg}", flag, qos=0, retain=False)
-            attr = {
-                "selected_areas_active_alerts": [single] if flag == "1" else [],
-                "selected_areas_updates": [] if flag == "1" else [single]
-            }
-            pub.publish(f"missile_alerts/{seg}_attr", json.dumps(attr, ensure_ascii=False), qos=0, retain=False)
+        with attr_state_lock:
+            pub.publish(ATTR_TOPIC, json.dumps(attr_state, ensure_ascii=False), qos=0, retain=False)
+            active = "1" if attr_state["selected_areas_active_alerts"] else "0"
+            pub.publish(STATE_TOPIC, active, qos=0, retain=False)
 
         pub.disconnect()
-        logger.info(f"Successfully published alert {single['id']} to Home Assistant.")
+        logger.info(f"Successfully published state to Home Assistant. Active: {active}")
     except Exception as e:
         logger.error(f"Failed to publish to Home Assistant: {e}")
 
 
 def _on_message_pushy(msg_payload):
-    # This function should do its work as fast as possible and not block.
-    now = datetime.now(timezone.utc)  # Use timezone-aware datetime for correct comparison
+    global attr_state
+    now = datetime.now(timezone.utc)
     if DEBUG:
         logger.debug(f"RAW NOTIFICATION: {msg_payload}")
 
     aid = (msg_payload.get("alertTitle") or msg_payload.get("id") or "").strip()
-    if DEBUG:
-        logger.debug(f"Parsed id: {aid}")
     if not aid or aid in _seen:
         return
     _seen.append(aid)
 
     title = msg_payload.get("title", "").strip()
-    raw_t = msg_payload.get("time", "")
+    raw_time = msg_payload.get("time", "")
 
-    # --- START of new latency check logic ---
+    # --- START: Re-integrated time parsing and latency logic from AppDaemon script ---
+    alert_time = ""
     latency = None
-    alert_time_utc = None
     try:
-        if raw_t:
-            # Parse the ISO format string from the payload, which includes timezone info
-            alert_time_utc = datetime.fromisoformat(raw_t)
-            # Calculate latency in seconds
-            latency = (now - alert_time_utc).total_seconds()
-            logger.info(f"📩 Received alert '{aid}' with latency: {latency:.2f}s")
+        if raw_time:
+            dt_object = None
+            if "T" in raw_time:
+                # Try native ISO format first; fall back to format with %z for timezone
+                try:
+                    dt_object = datetime.fromisoformat(raw_time)
+                except ValueError:
+                    dt_object = datetime.strptime(raw_time, "%Y-%m-%dT%H:%M:%S%z")
+            else:
+                # Handle the simpler "YYYY-MM-DD HH:MM:SS" format
+                dt_object = datetime.strptime(raw_time, "%Y-%m-%d %H:%M:%S")
 
-            # Optional: drop stale alerts
-            if latency > MAX_AGE_S:
-                logger.warning(f"Skipping stale alert {aid} (latency: {latency:.2f}s > max_age: {MAX_AGE_S}s)")
-                return
+            if dt_object:
+                # Convert to naive datetime to calculate latency with now()
+                dt_naive = dt_object.astimezone(None).replace(tzinfo=None)
+                latency = (now - dt_naive).total_seconds()
+                alert_time = dt_naive.strftime("%Y-%m-%d %H:%M:%S")
+                logger.info(f"📩 Received alert '{aid}' for '{title}' with latency: {latency:.2f}s")
+
+        if latency is not None and latency > MAX_AGE_S:
+            logger.warning(f"Skipping stale alert {aid} (latency: {latency:.2f}s > max_age: {MAX_AGE_S}s)")
+            return
+
     except Exception as e:
-        logger.warning(f"Could not parse timestamp '{raw_t}' to calculate latency: {e}")
-    # --- END of new latency check logic ---
-
-    # If in debug mode, we can exit after logging the latency.
-    if DEBUG:
-        logger.debug(f"Title='{title}', Time={raw_t}")
-        return
-
-    # If not in debug, continue to process and publish
-    try:
-        # Format the UTC time to a string for the payload if it exists
-        alert_date_str = alert_time_utc.strftime("%Y-%m-%d %H:%M:%S") if alert_time_utc else raw_t
-    except:
-        alert_date_str = raw_t
+        logger.warning(f"Could not parse timestamp '{raw_time}': {e}")
+        alert_time = raw_time  # Fallback to raw time if parsing fails
+    # --- END: Re-integrated time parsing ---
 
     segs = set(msg_payload.get("citiesIds", "").split(","))
     hits = segs & SEGMENTS
     if not hits:
         return
 
-    single = {
-        "title": title, "id": aid, "alertDate": alert_date_str,
-        "desc": msg_payload.get("desc", ""),
-        "cat": msg_payload.get("threatId", "")
-    }
+    logger.info(f"✅ Alert '{title}' is relevant for segments: {hits}")
 
-    ha_thread = threading.Thread(target=_publish_to_ha, args=(single, hits))
+    real_titles = {"ירי רקטות וטילים", "חדירת כלי טיס עוין"}
+    is_real = (title in real_titles)
+
+    attr_list_key = "selected_areas_active_alerts" if is_real else "selected_areas_updates"
+    clear_list_key = "selected_areas_updates" if is_real else "selected_areas_active_alerts"
+
+
+
+    with attr_state_lock:
+        attr_state[clear_list_key].clear()
+
+        for seg in hits:
+            entry = {
+                "alertDate": alert_time,
+                "title": title,
+                "data": name_map.get(seg, seg),
+                "category": msg_payload.get("threatId", ""),
+                "id": aid  # Add alert ID to the entry itself
+            }
+            attr_state[attr_list_key].append(entry)
+
+    ha_thread = threading.Thread(target=_publish_to_ha)
     ha_thread.daemon = True
     ha_thread.start()
 
 
 # ─── MAIN LISTENER ──────────────────────────────────────────────────────────
 class IoRefListener:
-    """
-    Connects once to a stable endpoint and uses a blocking loop to maintain
-    the connection, exactly like the Pushy library does.
-    """
-
     def __init__(self, token, auth):
         self.token = token
         self.auth = auth
         self.stopping = False
 
-        # FINAL: Use clean_session=False to perfectly match the native Android app's behavior.
-        # This requires paho-mqtt version 2.0+ and the V2 callback API.
         self.client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=self.token,
@@ -310,18 +332,13 @@ class IoRefListener:
         else:
             logger.error(f"Connection failed: {reason_code}. Paho's loop will retry.")
 
-    # The 'disconnect_flags' argument was missing.
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         if not self.stopping:
-            logger.warning(f"Disconnected from MQTT (rc: {reason_code}). Paho's loop will attempt to reconnect automatically.")
+            logger.warning(
+                f"Disconnected from MQTT (rc: {reason_code}). Paho's loop will attempt to reconnect automatically.")
 
     def start_loop(self):
-        """
-        This function runs in a dedicated thread and handles the entire
-        connection lifecycle, mimicking the Pushy library.
-        """
         socket.setdefaulttimeout(CONNECT_TIMEOUT)
-
         while not self.stopping:
             try:
                 endpoint = get_mqtt_endpoint(int(time.time()))
@@ -329,23 +346,58 @@ class IoRefListener:
                 ka = get_mqtt_keepalive()
                 logger.info(f"Attempting to connect to: {endpoint}")
                 self.client.connect(endpoint, port, ka)
-
-                # This is the blocking call that runs the network loop. It handles
-                # all reconnects automatically to the SAME host.
                 self.client.loop_forever()
-
             except (socket.timeout, OSError) as e:
-                logger.error(f"Connection error: {e}. Retrying after 5 seconds.")
-                time.sleep(5)
+                logger.error(f"Connection error: {e}. Retrying after 15 seconds.")
+                time.sleep(15)
             except Exception as e:
                 if not self.stopping:
                     logger.error(
-                        f"An unexpected error occurred in the listener thread: {e}. Retrying after 10 seconds.")
-                    time.sleep(10)
+                        f"An unexpected error occurred in the listener thread: {e}. Retrying after 15 seconds.")
+                    time.sleep(15)
+
+
+# --- Cleanup function and loop ---
+def _cleanup_and_republish_loop():
+    global attr_state
+    while True:
+        time.sleep(30)  # Check every 30 seconds
+
+        now = datetime.now(timezone.utc)
+        dirty = False
+
+        with attr_state_lock:
+            for key in ("selected_areas_active_alerts", "selected_areas_updates"):
+                fresh_list = []
+                for item in attr_state[key]:
+                    try:
+                        # FIX: Parse the full ISO 8601 string directly
+                        alert_dt = datetime.fromisoformat(item["alertDate"])
+
+                        if (now - alert_dt).total_seconds() < EXPIRY_S:
+                            fresh_list.append(item)
+                        else:
+                            logger.info(f"Expiring old alert: {item.get('id', 'N/A')}")
+                            dirty = True
+                    except Exception as e:
+                        logger.warning(f"Could not parse date for cleanup: {item.get('alertDate', 'N/A')} - {e}")
+                        fresh_list.append(item)
+
+                attr_state[key] = fresh_list
+
+        if dirty:
+            logger.info("State has changed due to expired alerts, republishing to HA.")
+            _publish_to_ha()
+
+
+def initialize_ha_sensor():
+    logger.info("Publishing initial state to Home Assistant...")
+    _publish_to_ha()
 
 
 # ─── ENTRY POINT ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    initialize_ha_sensor()
     token, auth = ensure_authenticated()
     reconcile_subscriptions(token, auth)
 
@@ -354,7 +406,10 @@ if __name__ == "__main__":
     listener_thread = threading.Thread(target=listener.start_loop, daemon=True, name="MQTTListenerLoop")
     listener_thread.start()
 
-    logger.info("🚀 Running; Ctrl-C to quit. Listener is running in the background.")
+    cleanup_thread = threading.Thread(target=_cleanup_and_republish_loop, daemon=True, name="HACleanupLoop")
+    cleanup_thread.start()
+
+    logger.info("🚀 Running; Ctrl-C to quit. All listener threads are running in the background.")
     try:
         while True:
             time.sleep(1)
@@ -363,5 +418,5 @@ if __name__ == "__main__":
         listener.stopping = True
         listener.client.disconnect()
         logger.info("Waiting for listener thread to finish...")
-        listener_thread.join()  # Wait for the loop to exit cleanly
+        listener_thread.join()
         logger.info("Shutdown complete.")
