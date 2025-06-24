@@ -30,7 +30,9 @@
 │   └── (DB-scraping helpers & title lists)
 ├── cities.json          # All city IDs (all the test cities should be removed in the final filtered .json, usually 500300 topic broadcast every few hours a test alert)
 ├── titles.json          # list of all possible hebrew titles that the app can send out to users
-└── pushy_missile_alerts.py
+├── mqttest.py           # A working standalone python script that would publish the updates to your set sensor by the set HA mqtt client
+├── apps.yaml            # Example for how the apps.yaml should be with the script for appdaemon run
+└── missile_alerts_app.py
 ```
 
 ---
@@ -53,7 +55,7 @@
    /config/appdaemon/apps/pushy_missile_alerts.py
    /config/appdaemon/apps/apps.yaml
    ```
-   Example `apps.yaml` snippet is in **`automation_examples/app.yaml`**.
+   Example `apps.yaml` snippet is in **`apps.yaml`**.
 
 4. **Create MQTT sensors** in Home Assistant  
    See **`automation_examples/configuration.yaml`** for two ready-made sensors.
@@ -67,7 +69,7 @@
 
 | Component | Role |
 |-----------|------|
-| **`pushy_missile_alerts.py`** | Subscribes to city-specific topics, decodes messages, and publishes two Home Assistant-friendly MQTT topics: `selected_areas_active_alerts` and `selected_areas_updates`. |
+| **`missile_alerts_app.py`** | Subscribes to city-specific topics, decodes messages, and publishes two Home Assistant-friendly MQTT topics: `selected_areas_active_alerts` and `selected_areas_updates`. |
 | **Automations** | Combine this sensor with the [amitfin/oref_alert](https://github.com/amitfin/oref_alert) integration for redundancy and race-condition guards. |
 
 Message samples live in **`data_examples/test_data.jsonl`**.
@@ -78,7 +80,6 @@ Message samples live in **`data_examples/test_data.jsonl`**.
 
 | Issue | Details | Potential Fix |
 |-------|---------|---------------|
-| **Latency during nationwide barrages** | Multiple simultaneous city alerts create backlog. | Investigate QoS, reconnect strategy, or multi-threaded client. |
 | **Threat classification** | Script currently flags titles containing `ירי רקטות` or `כלי טיס` as *unsafe*. | Use `threat_id` or a whitelist from `titles.json` for robustness. |
 ---
 
